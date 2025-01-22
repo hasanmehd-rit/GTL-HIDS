@@ -16,7 +16,7 @@ import pandas as pd
 import pickle
 
 from helper.note_template import NoteTemplate
-
+# Code
 gender_categories = ['female', 'male']
 race_categories = ['race not recorded', 'hispanic or latino', 'asian', 'black or african american',
                    'american indian or alaska native', 'white', 'native hawaiian or other pacific islander']
