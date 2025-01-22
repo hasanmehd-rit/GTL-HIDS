@@ -1,3 +1,155 @@
+# GTL-HIDS Project Status Report
+
+GTL-HIDS (Generative Tabular Learning-Enhanced Hybrid Intrusion Detection System) combines large language models with traditional ML for network intrusion detection. Our implementation uses TabLLM to process network flow data for both known and zero-day attack detection.
+
+## Current Status
+
+### Environment Setup Progress
+We have developed a detailed environment setup plan based on the TabLLM implementation requirements. TabLLM utilizes T-Few, a parameter-efficient fine-tuning framework designed specifically for few-shot learning with large language models, allowing effective model adaptation with minimal training examples.
+
+1. Primary Environment (TabLLM):
+```bash
+conda create -n tabllm python==3.8
+conda activate tabllm
+
+# Core ML Dependencies
+conda install numpy scipy pandas scikit-learn
+
+# PyTorch Installation with CUDA Support
+conda install pytorch==1.10.1 torchvision==0.11.2 torchaudio==0.10.1 cudatoolkit=11.3 -c pytorch -c conda-forge
+
+# Additional Required Packages
+pip install datasets transformers sentencepiece protobuf xgboost lightgbm tabpfn
+```
+
+2. Secondary Environment (T-Few):
+```bash
+conda create -n tfew python==3.7
+conda activate tfew
+
+# Core Dependencies
+pip install fsspec==2021.05.0
+pip install urllib3==1.26.6
+pip install importlib-metadata==4.13.0
+pip install scikit-learn
+
+# PyTorch Installation
+pip install --use-deprecated=legacy-resolver -r requirements.txt -f https://download.pytorch.org/whl/cu113/torch_stable.html
+```
+
+3. Environment Validation Plan:
+- Set Hugging Face cache directory: `export HF_HOME=~/.cache/huggingface`
+- Validate T-Few setup with test run:
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m src.pl_train -c t03b.json+rte.json -k save_model=False exp_name=first_exp
+```
+- Expected validation output location: `/root/t-few/exp_out/first_exp`
+
+### Dataset Preparation Status
+- Acquired NF-ToN-IoT dataset with 1,379,274 network flows
+- Initial analysis of data distribution completed:
+  - 1,108,995 (80.4%) attack samples
+  - 270,279 (19.6%) benign samples
+- Identified 12 key features for flow analysis including:
+  - Network identifiers (IP addresses, ports)
+  - Traffic metrics (bytes, packets, duration)
+  - Protocol information
+
+### Proposed TabLLM Data Format Approach
+1. Text Template Structure:
+```
+A network flow was observed with the following characteristics:
+Source IP {IPV4_SRC_ADDR} initiated communication on port {L4_SRC_PORT} 
+to destination IP {IPV4_DST_ADDR} on port {L4_DST_PORT}.
+The traffic consisted of {IN_PKTS} incoming and {OUT_PKTS} outgoing packets,
+transferring {IN_BYTES} incoming and {OUT_BYTES} outgoing bytes.
+The flow lasted {FLOW_DURATION_MILLISECONDS} milliseconds using protocol {PROTOCOL}.
+TCP flags observed: {TCP_FLAGS}
+Layer 7 protocol: {L7_PROTO}
+```
+
+2. Classification Prompt:
+```
+Based on this network flow pattern, is this traffic benign or malicious?
+Answer choices: Benign ||| Attack
+```
+
+3. Feature Handling Strategy:
+- IP Addresses: Maintain full address to preserve network patterns
+- Port Numbers: Include as numeric values
+- Protocol Numbers: Map to common protocol names where possible
+- Numeric Values: Present in human-readable format with units
+- TCP Flags: Convert binary flags to descriptive text
+
+### Model Training Implementation
+1. Data Preparation:
+```python
+from datasets import Dataset
+
+def create_network_flow_text(row):
+    template = """A network flow was observed with the following characteristics:
+    Source IP {src_ip} initiated communication on port {src_port} 
+    to destination IP {dst_ip} on port {dst_port}.
+    The traffic consisted of {in_pkts} incoming and {out_pkts} outgoing packets,
+    transferring {in_bytes} incoming and {out_bytes} outgoing bytes.
+    The flow lasted {duration} milliseconds using protocol {protocol}.
+    TCP flags observed: {tcp_flags}
+    Layer 7 protocol: {l7_proto}
+    """
+    return template.format(
+        src_ip=row['IPV4_SRC_ADDR'],
+        src_port=row['L4_SRC_PORT'],
+        dst_ip=row['IPV4_DST_ADDR'],
+        dst_port=row['L4_DST_PORT'],
+        in_pkts=row['IN_PKTS'],
+        out_pkts=row['OUT_PKTS'],
+        in_bytes=row['IN_BYTES'],
+        out_bytes=row['OUT_BYTES'],
+        duration=row['FLOW_DURATION_MILLISECONDS'],
+        protocol=row['PROTOCOL'],
+        tcp_flags=row['TCP_FLAGS'],
+        l7_proto=row['L7_PROTO']
+    )
+
+# Convert DataFrame to HuggingFace Dataset
+network_dataset = Dataset.from_pandas(network_flows_df)
+network_dataset = network_dataset.map(
+    lambda x: {'text': create_network_flow_text(x), 'label': 1 if x['Attack'] else 0}
+)
+```
+
+2. Model Training Setup:
+```bash
+# Set up training configuration
+cat > network_flows.json << EOL
+{
+    "task": "network_classification",
+    "dataset": "network_flows",
+    "num_iterations": 30,
+    "num_shots": 32,
+    "eval_batch_size": 16
+}
+EOL
+
+# Run training
+CUDA_VISIBLE_DEVICES=0 python -m src.pl_train \
+    -c t03b.json+network_flows.json \
+    -k exp_name=network_detection \
+    num_shots=32
+```
+
+3. Model Evaluation:
+```python
+# Check results
+python src/scripts/get_result_table.py -e network_detection* -d network_flows
+```
+
+### Next Steps
+1. Create and validate both conda environments following the outlined setup steps
+2. Set up necessary file paths and configurations
+3. Run environment validation tests
+4. Implement data transformation pipeline and begin model training
+
 # TabLLM: Few-shot Classification of Tabular Data with Large Language Models
 
 ![Figure_Overview](https://user-images.githubusercontent.com/3011151/215147227-b384c811-71b2-44c3-8785-007dcb687575.jpg)
